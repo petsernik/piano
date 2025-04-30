@@ -1,3 +1,5 @@
+import threading
+
 import pygame
 import numpy as np
 from mingus.core import scales, notes
@@ -51,20 +53,6 @@ class PianoKey:
         normalize_volumes()
 
 
-def normalize_volumes():
-    # Balance volume across active channels to prevent clipping
-    busy = []
-    for i in range(pygame.mixer.get_num_channels()):
-        ch = pygame.mixer.Channel(i)
-        if ch.get_sound():
-            busy.append(ch)
-    count = len(busy)
-    if count > 0:
-        vol = 1.0 / count
-        for ch in busy:
-            ch.set_volume(vol)
-
-
 def create_piano_layout(scale_notes):
     keys = []
     white_w, white_h = 40, 160
@@ -109,6 +97,73 @@ key_map = {
 
 midi_to_key = {key.midi:key for key in piano_keys}
 
+def normalize_volumes():
+    # Balance volume across active channels to prevent clipping
+    busy = []
+    for i in range(pygame.mixer.get_num_channels()):
+        ch = pygame.mixer.Channel(i)
+        if ch.get_sound():
+            busy.append(ch)
+    count = len(busy)
+    if count > 0:
+        vol = 1.0 / count
+        for ch in busy:
+            ch.set_volume(vol)
+
+def make_sound(midi: int, duration: float = 1.0) -> pygame.mixer.Sound:
+    """Synthesize one note with harmonics and ADSR envelope."""
+    freq = 440.0 * 2 ** ((midi - 69) / 12)
+    t = np.linspace(0, duration, int(SAMPLE_RATE * duration), False)
+
+    wave = (0.6 * np.sin(2*np.pi*freq*t) +
+            0.3 * np.sin(2*np.pi*2*freq*t) +
+            0.1 * np.sin(2*np.pi*3*freq*t) +
+            0.05 * np.sin(2*np.pi*4*freq*t))
+
+    # ADSR envelope
+    attack, decay, sustain_level, release = 0.01, 0.1, 0.7, 0.2
+    env = np.zeros_like(t)
+    a, d, r = int(attack*SAMPLE_RATE), int(decay*SAMPLE_RATE), int(release*SAMPLE_RATE)
+    s_start = a + d
+    if a:     env[:a] = np.linspace(0, 1, a)
+    if d:     env[a:s_start] = np.linspace(1, sustain_level, d)
+    env[s_start:len(t)-r] = sustain_level
+    if r:     env[-r:] = np.linspace(sustain_level, 0, r)
+    wave *= env
+
+    audio = np.clip(wave * 32767, -32767, 32767).astype(np.int16)
+    return pygame.mixer.Sound(buffer=audio.tobytes())
+
+# Generate list of scale notes
+MAJOR_STEPS = {0, 2, 4, 5, 7, 9, 11}
+def get_scale_midis(root: int, lo=24, hi=84) -> list[int]:
+    return [m for m in range(lo, hi+1) if (m - root) % 12 in MAJOR_STEPS]
+
+def play_scale_async(midis: list[int], note_dur=1.0, pause=0.5):
+    """Start playing a sequence of notes in a separate thread."""
+    def runner():
+        for m in midis:
+            snd = make_sound(m, note_dur)
+            ch = snd.play()
+            normalize_volumes()
+            # Do not block the main thread; wait for the note to finish in this thread
+            while ch.get_busy():
+                pygame.time.wait(5)
+            pygame.time.wait(int(pause*1000))
+    threading.Thread(target=runner, daemon=True).start()
+
+# Keys 1–8 → scale root notes (with CTRL)
+SCALE_ROOTS = {
+    pygame.K_1: 60,  # C4
+    pygame.K_2: 67,  # G4
+    pygame.K_3: 62,  # D4
+    pygame.K_4: 69,  # A4
+    pygame.K_5: 64,  # E4
+    pygame.K_6: 71,  # B4
+    pygame.K_7: 66,  # F#4
+    pygame.K_8: 61,  # C#4
+}
+
 # Main loop
 running = True
 while running:
@@ -120,6 +175,11 @@ while running:
                 if key.rect.collidepoint(event.pos): key.play(); key.active=True; break
         elif event.type == pygame.MOUSEBUTTONUP:
             for key in piano_keys: key.active=False
+        elif (event.type == pygame.KEYDOWN and event.mod & pygame.KMOD_CTRL
+              and event.key in SCALE_ROOTS):
+            root = SCALE_ROOTS[event.key]
+            scale_notes = get_scale_midis(root)
+            play_scale_async(scale_notes)
         elif event.type == pygame.KEYDOWN and event.key in key_map:
             key = midi_to_key.get(key_map[event.key])
             if key: key.play(); key.active=True
