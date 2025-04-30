@@ -4,7 +4,6 @@ import threading
 import pygame
 import numpy as np
 from mingus.core import scales, notes
-from numpy.ma.core import append
 
 # Initialize Pygame
 pygame.init()
@@ -18,7 +17,7 @@ pygame.display.set_caption("Tonal Piano - C Major Scale")
 SAMPLE_RATE = 44100
 pygame.mixer.init(frequency=SAMPLE_RATE, size=-16, channels=1)
 # Allow polyphony: multiple simultaneous voices
-pygame.mixer.set_num_channels(32)
+pygame.mixer.set_num_channels(64)
 
 class PianoKey:
     def __init__(self, midi, rect, color, in_scale):
@@ -136,17 +135,19 @@ def make_sound(midi: int, duration: float = 1.0) -> pygame.mixer.Sound:
     audio = np.clip(wave * 32767, -32767, 32767).astype(np.int16)
     return pygame.mixer.Sound(buffer=audio.tobytes())
 
-# Generate list of scale notes for one octave including the octave
 MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11]
 ALL_STEPS = [12 * k + x for k, x in product(range(3), MAJOR_STEPS)] + [12*3]
 TONALITIES = [36, 43, 38, 45, 40, 47, 42, 37]
 
-def play_note(tonality_index, x, y, note_dur=1.0):
+def play_note(tonality_index, x, y, note_dur=1.0, sequentially=False):
     snd = make_sound(TONALITIES[tonality_index] + ALL_STEPS[2*y + x], note_dur)
     ch = snd.play()
     normalize_volumes()
-    while ch.get_busy():
-        pygame.time.wait(5)
+    if sequentially:
+        while ch.get_busy():
+            pygame.time.wait(5)
+    else:
+        pygame.time.wait(int(note_dur * 0.07 * 1000))
 
 def get_scale_midis(root: int, lo=24, hi=84) -> list[int]:
     return [midi for step in ALL_STEPS if lo <= (midi := root + step) <= hi]
@@ -177,6 +178,8 @@ SCALE_ROOTS = {
 }
 
 # Main loop
+play_notes_active = False
+play_notes_thread = None
 running = True
 while running:
     for event in pygame.event.get():
@@ -196,9 +199,22 @@ while running:
             key = midi_to_key.get(key_map[event.key])
             if key: key.play(); key.active=True
         elif event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-            for index, y, x in product(range(8), range(8), range(8)):
-                print(index, x, y)
-                play_note(index, x, y)
+            if not play_notes_active:
+                play_notes_active = True
+
+                def play_notes_thread_func():
+                    global play_notes_active
+                    for index, y, x in product(range(8), range(8), range(8)):
+                        if not play_notes_active:
+                            break
+                        print(index, x, y)
+                        play_note(index, x, y)
+                    play_notes_active = False
+
+                play_notes_thread = threading.Thread(target=play_notes_thread_func)
+                play_notes_thread.start()
+            else:
+                play_notes_active = False
         elif event.type == pygame.KEYUP and event.key in key_map:
             key = midi_to_key.get(key_map[event.key])
             if key: key.active=False
