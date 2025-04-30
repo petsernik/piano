@@ -6,7 +6,7 @@ from mingus.core import scales, notes
 pygame.init()
 
 # Display settings
-WIDTH, HEIGHT = 800, 300
+WIDTH, HEIGHT = 1200, 300
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Tonal Piano - C Major Scale")
 
@@ -72,7 +72,7 @@ def create_piano_layout(scale_notes):
 
     white_x = 0
     last_white_x = 0
-    for midi in range(48, 84):  # C3–B5
+    for midi in range(24, 84):
         name = notes.int_to_note(midi % 12)
         in_scale = name in scale_notes
         if '#' not in name:
